@@ -146,10 +146,10 @@ class RosBridge(QtCore.QObject):
             except Exception as e:
                 ok = False
                 self.log_signal.emit("曝光值设置失败: %s" % str(e))
-        if self._service_available(ns + "/set_auto_white_balance"):
+        if self._service_available(ns + "/set_uvc_auto_white_balance"):
             try:
-                set_wb = rospy.ServiceProxy(ns + "/set_auto_white_balance", SetInt32)
-                set_wb(1 if auto_white_balance else 0)
+                set_wb = rospy.ServiceProxy(ns + "/set_uvc_auto_white_balance", SetBool)
+                set_wb(auto_white_balance)
             except Exception as e:
                 ok = False
                 self.log_signal.emit("白平衡设置失败: %s" % str(e))
@@ -175,6 +175,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.ros = ros_bridge
         self.servo_ids = [1, 2, 3, 4, 5, 10]
         self._last_send = {sid: 0.0 for sid in self.servo_ids}
+        self.realtime_enabled = False
         self.pose_order = ["init", "scan", "grab"]
         self._build_ui()
         self._load_from_config()
@@ -186,7 +187,10 @@ class SettingsDialog(QtWidgets.QDialog):
         debug_group = QtWidgets.QGroupBox("调试模式")
         debug_layout = QtWidgets.QHBoxLayout(debug_group)
         self.debug_cb = QtWidgets.QCheckBox("开启调试模式")
+        self.realtime_cb = QtWidgets.QCheckBox("启用实时控制")
+        self.realtime_cb.setChecked(False)
         debug_layout.addWidget(self.debug_cb)
+        debug_layout.addWidget(self.realtime_cb)
         layout.addWidget(debug_group)
 
         cam_group = QtWidgets.QGroupBox("相机参数")
@@ -255,6 +259,7 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(btns)
 
         self.debug_cb.stateChanged.connect(self._on_debug_changed)
+        self.realtime_cb.stateChanged.connect(self._on_realtime_changed)
         self.pose_tabs.currentChanged.connect(self._on_pose_tab_changed)
 
     def _make_pose_table(self):
@@ -307,7 +312,7 @@ class SettingsDialog(QtWidgets.QDialog):
             spin.blockSignals(True)
             spin.setValue(value)
             spin.blockSignals(False)
-        if self.debug_cb.isChecked():
+        if self.debug_cb.isChecked() and self.realtime_enabled:
             now = time.time()
             if now - self._last_send[sid] > 0.1:
                 self._last_send[sid] = now
@@ -368,6 +373,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.search_duration.setValue(int(search.get("duration_ms", 1500)))
         self.manual_hint_only.setChecked(bool(search.get("manual_hint_only", False)))
         self._set_sliders_enabled(self.debug_cb.isChecked())
+        self.realtime_cb.setChecked(False)
+        self.realtime_enabled = False
 
     def apply_to_config(self):
         self.config.data["debug"] = {"enabled": self.debug_cb.isChecked()}
@@ -403,11 +410,17 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _on_debug_changed(self):
         self._set_sliders_enabled(self.debug_cb.isChecked())
-        if self.debug_cb.isChecked():
-            self._send_current_pose()
+        if not self.debug_cb.isChecked():
+            self.realtime_cb.setChecked(False)
+            self.realtime_enabled = False
 
     def _on_pose_tab_changed(self):
-        if self.debug_cb.isChecked():
+        if self.debug_cb.isChecked() and self.realtime_enabled:
+            self._send_current_pose()
+
+    def _on_realtime_changed(self):
+        self.realtime_enabled = self.realtime_cb.isChecked()
+        if self.realtime_enabled and self.debug_cb.isChecked():
             self._send_current_pose()
 
     def _send_current_pose(self):
@@ -424,6 +437,11 @@ class SettingsDialog(QtWidgets.QDialog):
             for slider, spin in sliders.values():
                 slider.setEnabled(enabled)
                 spin.setEnabled(enabled)
+
+    def closeEvent(self, event):
+        self.realtime_enabled = False
+        self.realtime_cb.setChecked(False)
+        super().closeEvent(event)
 
 
 class MainWindow(QtWidgets.QMainWindow):
