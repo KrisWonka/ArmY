@@ -1,0 +1,17 @@
+<launch>
+  <arg name="camera_type" default="$(optenv CAMERA_TYPE GEMINI)"/>
+  <arg name="enable_base" default="true"/>
+  <arg name="enable_color_detection" default="true"/>
+
+  <group if="$(arg enable_base)">
+    <include file="$(find jetarm_bringup)/launch/base.launch"/>
+  </group>
+
+  <group if="$(arg enable_color_detection)">
+    <include file="$(find color_detection)/launch/color_detection_node.launch">
+      <arg name="camera_type" value="$(arg camera_type)"/>
+    </include>
+  </group>
+
+  <node pkg="jetarm_ui" type="jetarm_ui_node.py" name="jetarm_ui" output="screen"/>
+</launch>

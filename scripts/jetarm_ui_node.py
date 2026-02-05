@@ -1,0 +1,675 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import sys
+import os
+import threading
+import time
+import yaml
+
+import cv2
+import numpy as np
+import rospy
+from PyQt5 import QtCore, QtGui, QtWidgets
+
+from sensor_msgs.msg import Image as RosImage
+from std_srvs.srv import Empty
+from std_srvs.srv import SetBool
+from hiwonder_interfaces.msg import ObjectsInfo, MultiRawIdPosDur, RawIdPosDur
+from astra_camera.srv import SetInt32
+
+
+CONFIG_PATH = "/home/hiwonder/jetarm/src/jetarm_ui/config/ui_config.yaml"
+
+
+class UiConfig:
+    def __init__(self, path=CONFIG_PATH):
+        self.path = path
+        self.data = {}
+        self.load()
+
+    def load(self):
+        if os.path.exists(self.path):
+            with open(self.path, "r") as f:
+                self.data = yaml.safe_load(f) or {}
+        else:
+            self.data = {}
+
+    def save(self):
+        with open(self.path, "w") as f:
+            yaml.safe_dump(self.data, f, allow_unicode=True)
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
+
+
+class RosBridge(QtCore.QObject):
+    image_signal = QtCore.pyqtSignal(QtGui.QImage)
+    log_signal = QtCore.pyqtSignal(str)
+    objects_signal = QtCore.pyqtSignal(list)
+
+    def __init__(self, config: UiConfig):
+        super().__init__()
+        self.config = config
+        self.lock = threading.RLock()
+        self.image_sub = None
+        self.object_sub = None
+        self._camera_service_status = {}
+        self.servos_pub = rospy.Publisher(
+            "/controllers/multi_id_pos_dur", MultiRawIdPosDur, queue_size=1
+        )
+        self._last_objects = []
+
+    def start(self):
+        camera = self.config.get("camera", {})
+        image_topic = camera.get("image_topic", "/color_detection/image_result")
+        object_topic = camera.get("object_info_topic", "/object/pixel_coords")
+        self.image_sub = rospy.Subscriber(image_topic, RosImage, self._on_image, queue_size=1)
+        self.object_sub = rospy.Subscriber(object_topic, ObjectsInfo, self._on_objects, queue_size=1)
+
+    def stop(self):
+        if self.image_sub:
+            self.image_sub.unregister()
+            self.image_sub = None
+        if self.object_sub:
+            self.object_sub.unregister()
+            self.object_sub = None
+
+    def _on_image(self, ros_image: RosImage):
+        with self.lock:
+            img = np.ndarray(
+                shape=(ros_image.height, ros_image.width, 3),
+                dtype=np.uint8,
+                buffer=ros_image.data,
+            )
+            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+            roi = self.config.get("roi", {})
+            x_min = int(roi.get("x_min", 0))
+            y_min = int(roi.get("y_min", 0))
+            x_max = int(roi.get("x_max", 0))
+            y_max = int(roi.get("y_max", 0))
+            if x_max > x_min and y_max > y_min:
+                cv2.rectangle(bgr, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            bytes_per_line = ch * w
+            qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+            self.image_signal.emit(qimg.copy())
+
+    def _on_objects(self, msg: ObjectsInfo):
+        objs = []
+        for obj in msg.data:
+            objs.append(
+                {
+                    "label": obj.label,
+                    "center": (obj.center.x, obj.center.y),
+                    "size": (obj.size.width, obj.size.height),
+                    "yaw": obj.yaw,
+                }
+            )
+        self._last_objects = objs
+        self.objects_signal.emit(objs)
+
+    def move_servos(self, duration_ms, id_pos_list):
+        msg = MultiRawIdPosDur(
+            id_pos_dur_list=[
+                RawIdPosDur(int(sid), int(pos), int(duration_ms)) for sid, pos in id_pos_list
+            ]
+        )
+        self.servos_pub.publish(msg)
+
+    def call_empty(self, srv_name):
+        try:
+            rospy.wait_for_service(srv_name, timeout=1.0)
+            proxy = rospy.ServiceProxy(srv_name, Empty)
+            proxy()
+            return True
+        except Exception as e:
+            self.log_signal.emit("服务调用失败: %s" % str(e))
+            return False
+
+    def set_camera_params(self, auto_exposure, exposure, auto_white_balance):
+        camera = self.config.get("camera", {})
+        ns = camera.get("service_namespace", "/rgbd_cam")
+        ok = True
+        if self._service_available(ns + "/set_uvc_auto_exposure"):
+            try:
+                set_auto = rospy.ServiceProxy(ns + "/set_uvc_auto_exposure", SetBool)
+                set_auto(auto_exposure)
+            except Exception as e:
+                ok = False
+                self.log_signal.emit("曝光自动开关失败: %s" % str(e))
+        if self._service_available(ns + "/set_uvc_exposure"):
+            try:
+                set_exp = rospy.ServiceProxy(ns + "/set_uvc_exposure", SetInt32)
+                set_exp(int(exposure))
+            except Exception as e:
+                ok = False
+                self.log_signal.emit("曝光值设置失败: %s" % str(e))
+        if self._service_available(ns + "/set_auto_white_balance"):
+            try:
+                set_wb = rospy.ServiceProxy(ns + "/set_auto_white_balance", SetInt32)
+                set_wb(1 if auto_white_balance else 0)
+            except Exception as e:
+                ok = False
+                self.log_signal.emit("白平衡设置失败: %s" % str(e))
+        return ok
+
+    def _service_available(self, service_name):
+        if service_name in self._camera_service_status:
+            return self._camera_service_status[service_name]
+        try:
+            rospy.wait_for_service(service_name, timeout=0.2)
+            self._camera_service_status[service_name] = True
+        except Exception:
+            self._camera_service_status[service_name] = False
+            self.log_signal.emit("相机服务不可用，已跳过: %s" % service_name)
+        return self._camera_service_status[service_name]
+
+
+class SettingsDialog(QtWidgets.QDialog):
+    def __init__(self, config: UiConfig, ros_bridge: RosBridge, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("参数设置")
+        self.config = config
+        self.ros = ros_bridge
+        self.servo_ids = [1, 2, 3, 4, 5, 10]
+        self._last_send = {sid: 0.0 for sid in self.servo_ids}
+        self.pose_order = ["init", "scan", "grab"]
+        self._build_ui()
+        self._load_from_config()
+
+    def _build_ui(self):
+        self.resize(640, 520)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        debug_group = QtWidgets.QGroupBox("调试模式")
+        debug_layout = QtWidgets.QHBoxLayout(debug_group)
+        self.debug_cb = QtWidgets.QCheckBox("开启调试模式")
+        debug_layout.addWidget(self.debug_cb)
+        layout.addWidget(debug_group)
+
+        cam_group = QtWidgets.QGroupBox("相机参数")
+        cam_form = QtWidgets.QFormLayout(cam_group)
+        self.auto_exposure_cb = QtWidgets.QCheckBox("自动曝光")
+        self.exposure_spin = QtWidgets.QSpinBox()
+        self.exposure_spin.setRange(1, 20000)
+        self.auto_wb_cb = QtWidgets.QCheckBox("自动白平衡")
+        cam_form.addRow(self.auto_exposure_cb)
+        cam_form.addRow("曝光值", self.exposure_spin)
+        cam_form.addRow(self.auto_wb_cb)
+        layout.addWidget(cam_group)
+
+        roi_group = QtWidgets.QGroupBox("抓取范围 ROI")
+        roi_form = QtWidgets.QFormLayout(roi_group)
+        self.roi_x_min = QtWidgets.QSpinBox()
+        self.roi_y_min = QtWidgets.QSpinBox()
+        self.roi_x_max = QtWidgets.QSpinBox()
+        self.roi_y_max = QtWidgets.QSpinBox()
+        for w in (self.roi_x_min, self.roi_y_min, self.roi_x_max, self.roi_y_max):
+            w.setRange(0, 2000)
+        roi_form.addRow("x_min", self.roi_x_min)
+        roi_form.addRow("y_min", self.roi_y_min)
+        roi_form.addRow("x_max", self.roi_x_max)
+        roi_form.addRow("y_max", self.roi_y_max)
+        layout.addWidget(roi_group)
+
+        self.pose_tabs = QtWidgets.QTabWidget()
+        self.pose_tables = {}
+        self.pose_sliders = {}
+        for key, title in zip(self.pose_order, ["初始姿态", "扫描姿态", "抓取姿态"]):
+            widget = QtWidgets.QWidget()
+            vbox = QtWidgets.QVBoxLayout(widget)
+            table = self._make_pose_table()
+            vbox.addWidget(table)
+            sliders, slider_group = self._make_slider_group()
+            vbox.addWidget(slider_group)
+            self.pose_tabs.addTab(widget, title)
+            self.pose_tables[key] = table
+            self.pose_sliders[key] = sliders
+        layout.addWidget(self.pose_tabs)
+
+        search_group = QtWidgets.QGroupBox("搜索参数")
+        search_form = QtWidgets.QFormLayout(search_group)
+        self.base_servo_id = QtWidgets.QSpinBox()
+        self.base_servo_id.setRange(1, 20)
+        self.left_pos = QtWidgets.QSpinBox()
+        self.left_pos.setRange(0, 1000)
+        self.right_pos = QtWidgets.QSpinBox()
+        self.right_pos.setRange(0, 1000)
+        self.search_duration = QtWidgets.QSpinBox()
+        self.search_duration.setRange(100, 5000)
+        self.manual_hint_only = QtWidgets.QCheckBox("只提示方向，不自动转动")
+        search_form.addRow("底座舵机ID", self.base_servo_id)
+        search_form.addRow("左侧位置", self.left_pos)
+        search_form.addRow("右侧位置", self.right_pos)
+        search_form.addRow("移动时长(ms)", self.search_duration)
+        search_form.addRow(self.manual_hint_only)
+        layout.addWidget(search_group)
+
+        btns = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
+        )
+        btns.accepted.connect(self.accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self.debug_cb.stateChanged.connect(self._on_debug_changed)
+        self.pose_tabs.currentChanged.connect(self._on_pose_tab_changed)
+
+    def _make_pose_table(self):
+        table = QtWidgets.QTableWidget()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["舵机ID", "位置"])
+        table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        table.setRowCount(6)
+        for row in range(6):
+            item0 = QtWidgets.QTableWidgetItem("")
+            item0.setFlags(QtCore.Qt.ItemIsEnabled)
+            item1 = QtWidgets.QTableWidgetItem("")
+            item1.setFlags(QtCore.Qt.ItemIsEnabled)
+            table.setItem(row, 0, item0)
+            table.setItem(row, 1, item1)
+        return table
+
+    def _make_slider_group(self):
+        group = QtWidgets.QGroupBox("舵机角度")
+        grid = QtWidgets.QGridLayout(group)
+        sliders = {}
+        for row, sid in enumerate(self.servo_ids):
+            label = QtWidgets.QLabel("ID %d" % sid)
+            slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            slider.setRange(0, 1000)
+            spin = QtWidgets.QSpinBox()
+            spin.setRange(0, 1000)
+            grid.addWidget(label, row, 0)
+            grid.addWidget(slider, row, 1)
+            grid.addWidget(spin, row, 2)
+            sliders[sid] = (slider, spin)
+
+            slider.valueChanged.connect(
+                lambda val, sid=sid, spin=spin: self._on_slider_changed(sid, val, spin)
+            )
+            spin.valueChanged.connect(
+                lambda val, slider=slider: self._sync_spin_to_slider(slider, val)
+            )
+
+        return sliders, group
+
+    def _sync_spin_to_slider(self, slider, val):
+        if slider.value() != val:
+            slider.blockSignals(True)
+            slider.setValue(val)
+            slider.blockSignals(False)
+
+    def _on_slider_changed(self, sid, value, spin):
+        if spin.value() != value:
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        if self.debug_cb.isChecked():
+            now = time.time()
+            if now - self._last_send[sid] > 0.1:
+                self._last_send[sid] = now
+                self.ros.move_servos(200, [(sid, value)])
+
+    def _set_pose(self, pose_key, table, pose):
+        joints = pose.get("joints", [])
+        table.setRowCount(max(6, len(joints)))
+        joint_map = {j[0]: j[1] for j in joints if len(j) >= 2}
+        for idx, item in enumerate(joints):
+            table.setItem(idx, 0, QtWidgets.QTableWidgetItem(str(item[0])))
+            table.setItem(idx, 1, QtWidgets.QTableWidgetItem(str(item[1])))
+        sliders = self.pose_sliders.get(pose_key, {})
+        for sid in self.servo_ids:
+            value = int(joint_map.get(sid, 500))
+            if sid in sliders:
+                slider, spin = sliders[sid]
+                slider.blockSignals(True)
+                spin.blockSignals(True)
+                slider.setValue(value)
+                spin.setValue(value)
+                slider.blockSignals(False)
+                spin.blockSignals(False)
+
+    def _get_pose(self, pose_key, table):
+        joints = []
+        sliders = self.pose_sliders.get(pose_key, {})
+        for sid in self.servo_ids:
+            slider, _ = sliders.get(sid, (None, None))
+            if slider is None:
+                continue
+            joints.append([sid, int(slider.value())])
+        return joints
+
+    def _load_from_config(self):
+        debug = self.config.get("debug", {})
+        self.debug_cb.setChecked(bool(debug.get("enabled", False)))
+
+        cam = self.config.get("camera", {})
+        self.auto_exposure_cb.setChecked(bool(cam.get("auto_exposure", True)))
+        self.exposure_spin.setValue(int(cam.get("exposure", 2000)))
+        self.auto_wb_cb.setChecked(bool(cam.get("auto_white_balance", True)))
+
+        roi = self.config.get("roi", {})
+        self.roi_x_min.setValue(int(roi.get("x_min", 0)))
+        self.roi_y_min.setValue(int(roi.get("y_min", 0)))
+        self.roi_x_max.setValue(int(roi.get("x_max", 0)))
+        self.roi_y_max.setValue(int(roi.get("y_max", 0)))
+
+        poses = self.config.get("poses", {})
+        for key in self.pose_order:
+            self._set_pose(key, self.pose_tables[key], poses.get(key, {}))
+
+        search = self.config.get("search", {})
+        self.base_servo_id.setValue(int(search.get("base_servo_id", 1)))
+        self.left_pos.setValue(int(search.get("left_pos", 875)))
+        self.right_pos.setValue(int(search.get("right_pos", 125)))
+        self.search_duration.setValue(int(search.get("duration_ms", 1500)))
+        self.manual_hint_only.setChecked(bool(search.get("manual_hint_only", False)))
+        self._set_sliders_enabled(self.debug_cb.isChecked())
+
+    def apply_to_config(self):
+        self.config.data["debug"] = {"enabled": self.debug_cb.isChecked()}
+
+        cam = self.config.get("camera", {})
+        cam["auto_exposure"] = self.auto_exposure_cb.isChecked()
+        cam["exposure"] = int(self.exposure_spin.value())
+        cam["auto_white_balance"] = self.auto_wb_cb.isChecked()
+        self.config.data["camera"] = cam
+
+        self.config.data["roi"] = {
+            "x_min": int(self.roi_x_min.value()),
+            "y_min": int(self.roi_y_min.value()),
+            "x_max": int(self.roi_x_max.value()),
+            "y_max": int(self.roi_y_max.value()),
+        }
+
+        poses = self.config.get("poses", {})
+        for key in self.pose_order:
+            poses[key] = {
+                "duration_ms": poses.get(key, {}).get("duration_ms", 800),
+                "joints": self._get_pose(key, self.pose_tables[key]),
+            }
+        self.config.data["poses"] = poses
+
+        self.config.data["search"] = {
+            "base_servo_id": int(self.base_servo_id.value()),
+            "left_pos": int(self.left_pos.value()),
+            "right_pos": int(self.right_pos.value()),
+            "duration_ms": int(self.search_duration.value()),
+            "manual_hint_only": self.manual_hint_only.isChecked(),
+        }
+
+    def _on_debug_changed(self):
+        self._set_sliders_enabled(self.debug_cb.isChecked())
+        if self.debug_cb.isChecked():
+            self._send_current_pose()
+
+    def _on_pose_tab_changed(self):
+        if self.debug_cb.isChecked():
+            self._send_current_pose()
+
+    def _send_current_pose(self):
+        key = self.pose_order[self.pose_tabs.currentIndex()]
+        poses = self.config.get("poses", {})
+        pose = poses.get(key, {})
+        duration = int(pose.get("duration_ms", 800))
+        joints = self._get_pose(key, self.pose_tables[key])
+        if joints:
+            self.ros.move_servos(duration, joints)
+
+    def _set_sliders_enabled(self, enabled):
+        for sliders in self.pose_sliders.values():
+            for slider, spin in sliders.values():
+                slider.setEnabled(enabled)
+                spin.setEnabled(enabled)
+
+
+class MainWindow(QtWidgets.QMainWindow):
+    def __init__(self, config: UiConfig, ros_bridge: RosBridge):
+        super().__init__()
+        self.config = config
+        self.ros = ros_bridge
+        self.setWindowTitle("JetArm 自定义抓取")
+        self.resize(1000, 700)
+
+        self.system_on = False
+        self.state = "OFF"
+        self.target_label = None
+        self.search_direction = "left"
+        self.search_last_time = 0.0
+        self.detected_objects = []
+        self.search_paused = False
+
+        self._build_ui()
+        self._load_goods()
+        self._connect_signals()
+
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self._tick)
+        self.timer.start(200)
+
+    def _build_ui(self):
+        central = QtWidgets.QWidget()
+        self.setCentralWidget(central)
+        main_layout = QtWidgets.QVBoxLayout(central)
+
+        top_bar = QtWidgets.QHBoxLayout()
+        top_bar.addStretch()
+        self.toggle = QtWidgets.QCheckBox("总开关")
+        top_bar.addWidget(self.toggle)
+        main_layout.addLayout(top_bar)
+
+        content = QtWidgets.QHBoxLayout()
+        main_layout.addLayout(content, 1)
+
+        left_panel = QtWidgets.QVBoxLayout()
+        content.addLayout(left_panel, 1)
+        left_panel.addWidget(QtWidgets.QLabel("货物列表"))
+        self.goods_list = QtWidgets.QListWidget()
+        left_panel.addWidget(self.goods_list, 1)
+        self.add_good_btn = QtWidgets.QPushButton("添加货物")
+        left_panel.addWidget(self.add_good_btn)
+
+        right_panel = QtWidgets.QVBoxLayout()
+        content.addLayout(right_panel, 3)
+        self.video_label = QtWidgets.QLabel("视频")
+        self.video_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setStyleSheet("background-color: #222; color: #ccc;")
+        right_panel.addWidget(self.video_label, 1)
+
+        bottom = QtWidgets.QHBoxLayout()
+        main_layout.addLayout(bottom)
+        self.log_view = QtWidgets.QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        bottom.addWidget(self.log_view, 4)
+        self.settings_btn = QtWidgets.QPushButton("参数设置")
+        bottom.addWidget(self.settings_btn, 1)
+
+    def _connect_signals(self):
+        self.toggle.stateChanged.connect(self._on_toggle)
+        self.add_good_btn.clicked.connect(self._on_add_good)
+        self.goods_list.itemClicked.connect(self._on_select_good)
+        self.settings_btn.clicked.connect(self._on_settings)
+        self.ros.image_signal.connect(self._update_image)
+        self.ros.log_signal.connect(self._log)
+        self.ros.objects_signal.connect(self._update_objects)
+
+    def _load_goods(self):
+        self.goods_list.clear()
+        goods = self.config.get("goods", [])
+        for item in goods:
+            name = item.get("name", "未知")
+            label = item.get("label", "")
+            w = QtWidgets.QListWidgetItem("%s (%s)" % (name, label))
+            w.setData(QtCore.Qt.UserRole, item)
+            self.goods_list.addItem(w)
+
+    def _on_add_good(self):
+        name, ok = QtWidgets.QInputDialog.getText(self, "添加货物", "名称")
+        if not ok or not name.strip():
+            return
+        label, ok2 = QtWidgets.QInputDialog.getText(self, "添加货物", "识别标签")
+        if not ok2 or not label.strip():
+            return
+        goods = self.config.get("goods", [])
+        goods.append({"name": name.strip(), "label": label.strip()})
+        self.config.data["goods"] = goods
+        self.config.save()
+        self._load_goods()
+
+    def _on_select_good(self, item: QtWidgets.QListWidgetItem):
+        data = item.data(QtCore.Qt.UserRole)
+        self.target_label = data.get("label")
+        if not self.system_on:
+            self._log("请先打开总开关")
+            return
+        self.state = "SCAN"
+        self.search_paused = False
+        self._log("选择货物: %s" % data.get("name"))
+        self._move_pose("scan")
+
+    def _on_settings(self):
+        dlg = SettingsDialog(self.config, self.ros, self)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            dlg.apply_to_config()
+            self.config.save()
+            cam = self.config.get("camera", {})
+            self.ros.set_camera_params(
+                cam.get("auto_exposure", True),
+                cam.get("exposure", 2000),
+                cam.get("auto_white_balance", True),
+            )
+            if self.system_on and self.state == "INIT":
+                self._move_pose("init")
+
+    def _on_toggle(self, state):
+        self.system_on = state == QtCore.Qt.Checked
+        if self.system_on:
+            self.state = "INIT"
+            self._log("总开关开启，进入初始姿态")
+            self._move_pose("init")
+            self._start_detection()
+        else:
+            self.state = "OFF"
+            self._log("总开关关闭")
+            self._stop_detection()
+
+    def _start_detection(self):
+        self.ros.start()
+        self.ros.call_empty("/color_detection/enter")
+        self.ros.call_empty("/color_detection/start")
+
+    def _stop_detection(self):
+        self.ros.call_empty("/color_detection/stop")
+        self.ros.call_empty("/color_detection/exit")
+        self.ros.stop()
+
+    def _move_pose(self, pose_key):
+        poses = self.config.get("poses", {})
+        pose = poses.get(pose_key, {})
+        duration = int(pose.get("duration_ms", 800))
+        joints = pose.get("joints", [])
+        if joints:
+            self.ros.move_servos(duration, joints)
+
+    def _update_image(self, qimg: QtGui.QImage):
+        self.video_label.setPixmap(QtGui.QPixmap.fromImage(qimg).scaled(
+            self.video_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+        ))
+
+    def _update_objects(self, objs):
+        self.detected_objects = objs
+
+    def _log(self, msg):
+        ts = time.strftime("%H:%M:%S")
+        self.log_view.appendPlainText("[%s] %s" % (ts, msg))
+        self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
+
+    def _target_in_roi(self):
+        if not self.target_label:
+            return False, None
+        roi = self.config.get("roi", {})
+        x_min = int(roi.get("x_min", 0))
+        y_min = int(roi.get("y_min", 0))
+        x_max = int(roi.get("x_max", 0))
+        y_max = int(roi.get("y_max", 0))
+        for obj in self.detected_objects:
+            if obj["label"] != self.target_label:
+                continue
+            x, y = obj["center"]
+            if x_min <= x <= x_max and y_min <= y <= y_max:
+                return True, obj
+        return False, None
+
+    def _target_side_hint(self):
+        if not self.target_label:
+            return None
+        roi = self.config.get("roi", {})
+        center_x = (int(roi.get("x_min", 0)) + int(roi.get("x_max", 0))) / 2.0
+        for obj in self.detected_objects:
+            if obj["label"] != self.target_label:
+                continue
+            x, _ = obj["center"]
+            return "left" if x < center_x else "right"
+        return None
+
+    def _sweep_search(self):
+        search = self.config.get("search", {})
+        if search.get("manual_hint_only", False):
+            return
+        now = time.time()
+        if now - self.search_last_time < 2.0:
+            return
+        self.search_last_time = now
+        sid = int(search.get("base_servo_id", 1))
+        duration = int(search.get("duration_ms", 1500))
+        if self.search_direction == "left":
+            pos = int(search.get("left_pos", 875))
+            self._log("左移")
+            self.search_direction = "right"
+        else:
+            pos = int(search.get("right_pos", 125))
+            self._log("右移")
+            self.search_direction = "left"
+        self.ros.move_servos(duration, [(sid, pos)])
+
+    def _tick(self):
+        if not self.system_on:
+            return
+        if self.state in ("SCAN", "SEARCH"):
+            in_roi, _ = self._target_in_roi()
+            if in_roi:
+                self._log("目标进入抓取范围")
+                self.state = "GRAB"
+                self._move_pose("grab")
+                self._log("进入抓取姿态，等待抓取方案确认")
+                return
+            side = self._target_side_hint()
+            if side:
+                if not self.search_paused:
+                    self.search_paused = True
+                    if side == "left":
+                        self._log("左边发现目标，请移动机械臂")
+                    else:
+                        self._log("右边发现目标，请移动机械臂")
+            else:
+                self.search_paused = False
+                self.state = "SEARCH"
+                self._sweep_search()
+
+
+def main():
+    rospy.init_node("jetarm_ui", disable_signals=True)
+    config = UiConfig()
+    ros_bridge = RosBridge(config)
+    app = QtWidgets.QApplication(sys.argv)
+    win = MainWindow(config, ros_bridge)
+    win.show()
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    main()
