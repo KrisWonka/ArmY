@@ -235,7 +235,7 @@ class RosBridge(QtCore.QObject):
         return self._camera_service_status[service_name]
 
 
-class SettingsPanel(QtWidgets.QWidget):
+class SettingsDialog(QtWidgets.QDialog):
     def __init__(self, config: UiConfig, ros_bridge: RosBridge, parent=None):
         super().__init__(parent)
         self.config = config
@@ -611,11 +611,6 @@ class MainWindow(QtWidgets.QMainWindow):
         video_row.addWidget(self.depth_label, 1)
         right_panel.addLayout(video_row, 1)
 
-        self.settings_panel = SettingsPanel(self.config, self.ros, self)
-        self.settings_panel.setFixedWidth(320)
-        self.settings_panel.setVisible(False)
-        content.addWidget(self.settings_panel)
-
         bottom = QtWidgets.QHBoxLayout()
         main_layout.addLayout(bottom)
         self.log_view = QtWidgets.QPlainTextEdit()
@@ -636,6 +631,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ros.depth_image_signal.connect(self._update_depth_image)
         self.ros.log_signal.connect(self._log)
         self.ros.objects_signal.connect(self._update_objects)
+
+        self.settings_dialog = SettingsDialog(self.config, self.ros, self)
+        self.settings_dialog.setModal(False)
 
     def _load_goods(self):
         self.goods_list.clear()
@@ -672,7 +670,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._move_pose("scan")
 
     def _on_settings(self):
-        self.settings_panel.setVisible(not self.settings_panel.isVisible())
+        if self.settings_dialog.isVisible():
+            self.settings_dialog.hide()
+            return
+        main_geo = self.geometry()
+        dialog_size = self.settings_dialog.sizeHint()
+        new_x = main_geo.x() + main_geo.width() + 10
+        new_y = main_geo.y()
+        self.settings_dialog.resize(dialog_size.width(), dialog_size.height())
+        self.settings_dialog.move(new_x, new_y)
+        self.settings_dialog.show()
 
     def _on_stop(self):
         self.target_label = None
