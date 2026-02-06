@@ -193,17 +193,6 @@ class SettingsDialog(QtWidgets.QDialog):
         debug_layout.addWidget(self.realtime_cb)
         layout.addWidget(debug_group)
 
-        cam_group = QtWidgets.QGroupBox("相机参数")
-        cam_form = QtWidgets.QFormLayout(cam_group)
-        self.auto_exposure_cb = QtWidgets.QCheckBox("自动曝光")
-        self.exposure_spin = QtWidgets.QSpinBox()
-        self.exposure_spin.setRange(1, 20000)
-        self.auto_wb_cb = QtWidgets.QCheckBox("自动白平衡")
-        cam_form.addRow(self.auto_exposure_cb)
-        cam_form.addRow("曝光值", self.exposure_spin)
-        cam_form.addRow(self.auto_wb_cb)
-        layout.addWidget(cam_group)
-
         roi_group = QtWidgets.QGroupBox("抓取范围 ROI")
         roi_form = QtWidgets.QFormLayout(roi_group)
         self.roi_x_min = QtWidgets.QSpinBox()
@@ -351,11 +340,6 @@ class SettingsDialog(QtWidgets.QDialog):
         debug = self.config.get("debug", {})
         self.debug_cb.setChecked(bool(debug.get("enabled", False)))
 
-        cam = self.config.get("camera", {})
-        self.auto_exposure_cb.setChecked(bool(cam.get("auto_exposure", True)))
-        self.exposure_spin.setValue(int(cam.get("exposure", 2000)))
-        self.auto_wb_cb.setChecked(bool(cam.get("auto_white_balance", True)))
-
         roi = self.config.get("roi", {})
         self.roi_x_min.setValue(int(roi.get("x_min", 0)))
         self.roi_y_min.setValue(int(roi.get("y_min", 0)))
@@ -378,12 +362,6 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def apply_to_config(self):
         self.config.data["debug"] = {"enabled": self.debug_cb.isChecked()}
-
-        cam = self.config.get("camera", {})
-        cam["auto_exposure"] = self.auto_exposure_cb.isChecked()
-        cam["exposure"] = int(self.exposure_spin.value())
-        cam["auto_white_balance"] = self.auto_wb_cb.isChecked()
-        self.config.data["camera"] = cam
 
         self.config.data["roi"] = {
             "x_min": int(self.roi_x_min.value()),
@@ -504,13 +482,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log_view.setReadOnly(True)
         bottom.addWidget(self.log_view, 4)
         self.settings_btn = QtWidgets.QPushButton("参数设置")
+        self.stop_btn = QtWidgets.QPushButton("停止并回初始")
         bottom.addWidget(self.settings_btn, 1)
+        bottom.addWidget(self.stop_btn, 1)
 
     def _connect_signals(self):
         self.toggle.stateChanged.connect(self._on_toggle)
         self.add_good_btn.clicked.connect(self._on_add_good)
         self.goods_list.itemClicked.connect(self._on_select_good)
         self.settings_btn.clicked.connect(self._on_settings)
+        self.stop_btn.clicked.connect(self._on_stop)
         self.ros.image_signal.connect(self._update_image)
         self.ros.log_signal.connect(self._log)
         self.ros.objects_signal.connect(self._update_objects)
@@ -554,14 +535,16 @@ class MainWindow(QtWidgets.QMainWindow):
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             dlg.apply_to_config()
             self.config.save()
-            cam = self.config.get("camera", {})
-            self.ros.set_camera_params(
-                cam.get("auto_exposure", True),
-                cam.get("exposure", 2000),
-                cam.get("auto_white_balance", True),
-            )
             if self.system_on and self.state == "INIT":
                 self._move_pose("init")
+
+    def _on_stop(self):
+        self.target_label = None
+        self.search_paused = False
+        self.search_direction = "left"
+        self.state = "INIT"
+        self._log("停止当前流程，回到初始姿态")
+        self._move_pose("init")
 
     def _on_toggle(self, state):
         self.system_on = state == QtCore.Qt.Checked
@@ -639,7 +622,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if search.get("manual_hint_only", False):
             return
         now = time.time()
-        if now - self.search_last_time < 2.0:
+        interval = float(search.get("interval_sec", 6.0))
+        if now - self.search_last_time < interval:
             return
         self.search_last_time = now
         sid = int(search.get("base_servo_id", 1))
