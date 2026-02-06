@@ -1,6 +1,7 @@
 camera:
   name: rgbd_cam
   image_topic: /color_detection/image_result
+  depth_topic: /rgbd_cam/depth/image_raw
   object_info_topic: /object/pixel_coords
   camera_info_topic: /rgbd_cam/color/camera_info
   service_namespace: /rgbd_cam

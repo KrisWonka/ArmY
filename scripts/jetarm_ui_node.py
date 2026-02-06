@@ -14,7 +14,7 @@ from PyQt5 import QtCore, QtGui, QtWidgets
 
 from sensor_msgs.msg import Image as RosImage
 from std_srvs.srv import Empty
-from std_srvs.srv import SetBool
+from std_srvs.srv import SetBool, Trigger
 from hiwonder_interfaces.msg import ObjectsInfo, MultiRawIdPosDur, RawIdPosDur
 from astra_camera.srv import SetInt32
 
@@ -45,6 +45,7 @@ class UiConfig:
 
 class RosBridge(QtCore.QObject):
     image_signal = QtCore.pyqtSignal(QtGui.QImage)
+    depth_image_signal = QtCore.pyqtSignal(QtGui.QImage)
     log_signal = QtCore.pyqtSignal(str)
     objects_signal = QtCore.pyqtSignal(list)
 
@@ -54,6 +55,7 @@ class RosBridge(QtCore.QObject):
         self.lock = threading.RLock()
         self.image_sub = None
         self.object_sub = None
+        self.depth_sub = None
         self._camera_service_status = {}
         self.servos_pub = rospy.Publisher(
             "/controllers/multi_id_pos_dur", MultiRawIdPosDur, queue_size=1
@@ -63,14 +65,19 @@ class RosBridge(QtCore.QObject):
     def start(self):
         camera = self.config.get("camera", {})
         image_topic = camera.get("image_topic", "/color_detection/image_result")
+        depth_topic = camera.get("depth_topic", "/rgbd_cam/depth/image_raw")
         object_topic = camera.get("object_info_topic", "/object/pixel_coords")
         self.image_sub = rospy.Subscriber(image_topic, RosImage, self._on_image, queue_size=1)
+        self.depth_sub = rospy.Subscriber(depth_topic, RosImage, self._on_depth_image, queue_size=1)
         self.object_sub = rospy.Subscriber(object_topic, ObjectsInfo, self._on_objects, queue_size=1)
 
     def stop(self):
         if self.image_sub:
             self.image_sub.unregister()
             self.image_sub = None
+        if self.depth_sub:
+            self.depth_sub.unregister()
+            self.depth_sub = None
         if self.object_sub:
             self.object_sub.unregister()
             self.object_sub = None
@@ -95,6 +102,23 @@ class RosBridge(QtCore.QObject):
             bytes_per_line = ch * w
             qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
             self.image_signal.emit(qimg.copy())
+
+    def _on_depth_image(self, ros_image: RosImage):
+        with self.lock:
+            depth = np.ndarray(
+                shape=(ros_image.height, ros_image.width),
+                dtype=np.uint16 if "16" in ros_image.encoding else np.float32,
+                buffer=ros_image.data,
+            )
+            depth = np.nan_to_num(depth)
+            depth_norm = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX)
+            depth_u8 = depth_norm.astype(np.uint8)
+            depth_color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
+            rgb = cv2.cvtColor(depth_color, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            bytes_per_line = ch * w
+            qimg = QtGui.QImage(rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+            self.depth_image_signal.emit(qimg.copy())
 
     def _on_objects(self, msg: ObjectsInfo):
         objs = []
@@ -127,6 +151,50 @@ class RosBridge(QtCore.QObject):
         except Exception as e:
             self.log_signal.emit("服务调用失败: %s" % str(e))
             return False
+
+    def call_trigger(self, srv_name):
+        try:
+            rospy.wait_for_service(srv_name, timeout=1.0)
+            proxy = rospy.ServiceProxy(srv_name, Trigger)
+            proxy()
+            return True
+        except Exception as e:
+            self.log_signal.emit("服务调用失败: %s" % str(e))
+            return False
+
+    def call_setbool(self, srv_name, value):
+        try:
+            rospy.wait_for_service(srv_name, timeout=1.0)
+            proxy = rospy.ServiceProxy(srv_name, SetBool)
+            proxy(value)
+            return True
+        except Exception as e:
+            self.log_signal.emit("服务调用失败: %s" % str(e))
+            return False
+
+    def set_uvc_auto_exposure(self, enabled):
+        camera = self.config.get("camera", {})
+        ns = camera.get("service_namespace", "/rgbd_cam")
+        if self._service_available(ns + "/set_uvc_auto_exposure"):
+            try:
+                proxy = rospy.ServiceProxy(ns + "/set_uvc_auto_exposure", SetBool)
+                proxy(enabled)
+                return True
+            except Exception as e:
+                self.log_signal.emit("曝光自动开关失败: %s" % str(e))
+        return False
+
+    def set_uvc_exposure(self, value):
+        camera = self.config.get("camera", {})
+        ns = camera.get("service_namespace", "/rgbd_cam")
+        if self._service_available(ns + "/set_uvc_exposure"):
+            try:
+                proxy = rospy.ServiceProxy(ns + "/set_uvc_exposure", SetInt32)
+                proxy(int(value))
+                return True
+            except Exception as e:
+                self.log_signal.emit("曝光值设置失败: %s" % str(e))
+        return False
 
     def set_camera_params(self, auto_exposure, exposure, auto_white_balance):
         camera = self.config.get("camera", {})
@@ -167,21 +235,20 @@ class RosBridge(QtCore.QObject):
         return self._camera_service_status[service_name]
 
 
-class SettingsDialog(QtWidgets.QDialog):
+class SettingsPanel(QtWidgets.QWidget):
     def __init__(self, config: UiConfig, ros_bridge: RosBridge, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("参数设置")
         self.config = config
         self.ros = ros_bridge
         self.servo_ids = [1, 2, 3, 4, 5, 10]
         self._last_send = {sid: 0.0 for sid in self.servo_ids}
         self.realtime_enabled = False
+        self._last_exposure_send = 0.0
         self.pose_order = ["init", "scan", "grab"]
         self._build_ui()
         self._load_from_config()
 
     def _build_ui(self):
-        self.resize(640, 520)
         layout = QtWidgets.QVBoxLayout(self)
 
         debug_group = QtWidgets.QGroupBox("调试模式")
@@ -192,6 +259,16 @@ class SettingsDialog(QtWidgets.QDialog):
         debug_layout.addWidget(self.debug_cb)
         debug_layout.addWidget(self.realtime_cb)
         layout.addWidget(debug_group)
+
+        exposure_group = QtWidgets.QGroupBox("曝光(手动)")
+        exposure_layout = QtWidgets.QFormLayout(exposure_group)
+        self.exposure_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.exposure_slider.setRange(0, 20000)
+        self.exposure_spin = QtWidgets.QSpinBox()
+        self.exposure_spin.setRange(0, 20000)
+        exposure_layout.addRow("曝光值", self.exposure_slider)
+        exposure_layout.addRow("", self.exposure_spin)
+        layout.addWidget(exposure_group)
 
         roi_group = QtWidgets.QGroupBox("抓取范围 ROI")
         roi_form = QtWidgets.QFormLayout(roi_group)
@@ -240,16 +317,22 @@ class SettingsDialog(QtWidgets.QDialog):
         search_form.addRow(self.manual_hint_only)
         layout.addWidget(search_group)
 
-        btns = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel
-        )
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        calib_group = QtWidgets.QGroupBox("色彩校准")
+        calib_layout = QtWidgets.QHBoxLayout(calib_group)
+        self.calib_btn = QtWidgets.QPushButton("进入色彩校准")
+        calib_layout.addWidget(self.calib_btn)
+        layout.addWidget(calib_group)
+
+        self.save_btn = QtWidgets.QPushButton("保存参数")
+        layout.addWidget(self.save_btn)
 
         self.debug_cb.stateChanged.connect(self._on_debug_changed)
         self.realtime_cb.stateChanged.connect(self._on_realtime_changed)
         self.pose_tabs.currentChanged.connect(self._on_pose_tab_changed)
+        self.exposure_slider.valueChanged.connect(self._on_exposure_changed)
+        self.exposure_spin.valueChanged.connect(self._on_exposure_spin_changed)
+        self.calib_btn.clicked.connect(self._on_calibration)
+        self.save_btn.clicked.connect(self._on_save)
 
     def _make_pose_table(self):
         table = QtWidgets.QTableWidget()
@@ -307,6 +390,32 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._last_send[sid] = now
                 self.ros.move_servos(200, [(sid, value)])
 
+    def _on_exposure_changed(self, value):
+        if self.exposure_spin.value() != value:
+            self.exposure_spin.blockSignals(True)
+            self.exposure_spin.setValue(value)
+            self.exposure_spin.blockSignals(False)
+        self._send_exposure(value)
+
+    def _on_exposure_spin_changed(self, value):
+        if self.exposure_slider.value() != value:
+            self.exposure_slider.blockSignals(True)
+            self.exposure_slider.setValue(value)
+            self.exposure_slider.blockSignals(False)
+        self._send_exposure(value)
+
+    def _send_exposure(self, value):
+        now = time.time()
+        if now - self._last_exposure_send < 0.2:
+            return
+        self._last_exposure_send = now
+        camera = self.config.get("camera", {})
+        camera["exposure"] = int(value)
+        camera["auto_exposure"] = False
+        self.config.data["camera"] = camera
+        self.ros.set_uvc_auto_exposure(False)
+        self.ros.set_uvc_exposure(value)
+
     def _set_pose(self, pose_key, table, pose):
         joints = pose.get("joints", [])
         table.setRowCount(max(6, len(joints)))
@@ -340,6 +449,11 @@ class SettingsDialog(QtWidgets.QDialog):
         debug = self.config.get("debug", {})
         self.debug_cb.setChecked(bool(debug.get("enabled", False)))
 
+        cam = self.config.get("camera", {})
+        exposure = int(cam.get("exposure", 2000))
+        self.exposure_slider.setValue(exposure)
+        self.exposure_spin.setValue(exposure)
+
         roi = self.config.get("roi", {})
         self.roi_x_min.setValue(int(roi.get("x_min", 0)))
         self.roi_y_min.setValue(int(roi.get("y_min", 0)))
@@ -362,6 +476,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def apply_to_config(self):
         self.config.data["debug"] = {"enabled": self.debug_cb.isChecked()}
+
+        cam = self.config.get("camera", {})
+        cam["exposure"] = int(self.exposure_spin.value())
+        self.config.data["camera"] = cam
 
         self.config.data["roi"] = {
             "x_min": int(self.roi_x_min.value()),
@@ -400,6 +518,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.realtime_enabled = self.realtime_cb.isChecked()
         if self.realtime_enabled and self.debug_cb.isChecked():
             self._send_current_pose()
+
+    def _on_calibration(self):
+        self.ros.call_trigger("/lab_config_manager/enter")
+        self.ros.call_setbool("/lab_config_manager/set_running", True)
+        self.ros.log_signal.emit("已进入色彩校准")
+
+    def _on_save(self):
+        self.apply_to_config()
+        self.config.save()
+        self.ros.log_signal.emit("参数已保存")
 
     def _send_current_pose(self):
         key = self.pose_order[self.pose_tabs.currentIndex()]
@@ -470,11 +598,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
         right_panel = QtWidgets.QVBoxLayout()
         content.addLayout(right_panel, 3)
-        self.video_label = QtWidgets.QLabel("视频")
+        video_row = QtWidgets.QHBoxLayout()
+        self.video_label = QtWidgets.QLabel("相机画面")
         self.video_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.video_label.setMinimumSize(640, 480)
+        self.video_label.setMinimumSize(480, 360)
         self.video_label.setStyleSheet("background-color: #222; color: #ccc;")
-        right_panel.addWidget(self.video_label, 1)
+        self.depth_label = QtWidgets.QLabel("深度画面")
+        self.depth_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.depth_label.setMinimumSize(480, 360)
+        self.depth_label.setStyleSheet("background-color: #222; color: #ccc;")
+        video_row.addWidget(self.video_label, 1)
+        video_row.addWidget(self.depth_label, 1)
+        right_panel.addLayout(video_row, 1)
+
+        self.settings_panel = SettingsPanel(self.config, self.ros, self)
+        self.settings_panel.setFixedWidth(320)
+        self.settings_panel.setVisible(False)
+        content.addWidget(self.settings_panel)
 
         bottom = QtWidgets.QHBoxLayout()
         main_layout.addLayout(bottom)
@@ -493,6 +633,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.settings_btn.clicked.connect(self._on_settings)
         self.stop_btn.clicked.connect(self._on_stop)
         self.ros.image_signal.connect(self._update_image)
+        self.ros.depth_image_signal.connect(self._update_depth_image)
         self.ros.log_signal.connect(self._log)
         self.ros.objects_signal.connect(self._update_objects)
 
@@ -531,12 +672,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._move_pose("scan")
 
     def _on_settings(self):
-        dlg = SettingsDialog(self.config, self.ros, self)
-        if dlg.exec_() == QtWidgets.QDialog.Accepted:
-            dlg.apply_to_config()
-            self.config.save()
-            if self.system_on and self.state == "INIT":
-                self._move_pose("init")
+        self.settings_panel.setVisible(not self.settings_panel.isVisible())
 
     def _on_stop(self):
         self.target_label = None
@@ -579,6 +715,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _update_image(self, qimg: QtGui.QImage):
         self.video_label.setPixmap(QtGui.QPixmap.fromImage(qimg).scaled(
             self.video_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+        ))
+
+    def _update_depth_image(self, qimg: QtGui.QImage):
+        self.depth_label.setPixmap(QtGui.QPixmap.fromImage(qimg).scaled(
+            self.depth_label.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
         ))
 
     def _update_objects(self, objs):
