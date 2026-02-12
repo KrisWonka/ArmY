@@ -518,11 +518,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.realtime_enabled = self.realtime_cb.isChecked()
         if self.realtime_enabled and self.debug_cb.isChecked():
             self._send_current_pose()
+        if not self.realtime_enabled:
+            self._persist_debug_params()
 
     def _on_calibration(self):
-        self.ros.call_trigger("/lab_config_manager/enter")
-        self.ros.call_setbool("/lab_config_manager/set_running", True)
-        self.ros.log_signal.emit("已进入色彩校准")
+        if self.ros.call_trigger("/lab_config_manager/enter"):
+            self.ros.log_signal.emit("已进入色彩校准")
+        else:
+            self.ros.log_signal.emit("色彩校准进入失败")
 
     def _on_save(self):
         self.apply_to_config()
@@ -547,7 +550,12 @@ class SettingsDialog(QtWidgets.QDialog):
     def closeEvent(self, event):
         self.realtime_enabled = False
         self.realtime_cb.setChecked(False)
+        self._persist_debug_params()
         super().closeEvent(event)
+
+    def _persist_debug_params(self):
+        self.apply_to_config()
+        self.config.save()
 
 
 class MainWindow(QtWidgets.QMainWindow):
