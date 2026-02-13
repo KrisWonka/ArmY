@@ -244,7 +244,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._last_send = {sid: 0.0 for sid in self.servo_ids}
         self.realtime_enabled = False
         self._last_exposure_send = 0.0
-        self.pose_order = ["init", "scan", "grab"]
+        self.pose_order = ["init", "scan", "grab", "grab_layer1"]
         self._build_ui()
         self._load_from_config()
 
@@ -287,7 +287,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.pose_tabs = QtWidgets.QTabWidget()
         self.pose_tables = {}
         self.pose_sliders = {}
-        for key, title in zip(self.pose_order, ["初始姿态", "扫描姿态", "抓取姿态"]):
+        for key, title in zip(self.pose_order, ["初始姿态", "扫描姿态", "抓取姿态", "第一层抓取姿态"]):
             widget = QtWidgets.QWidget()
             vbox = QtWidgets.QVBoxLayout(widget)
             table = self._make_pose_table()
