@@ -135,6 +135,10 @@ class RosBridge(QtCore.QObject):
         self.objects_signal.emit(objs)
 
     def move_servos(self, duration_ms, id_pos_list):
+        motion = self.config.get("motion", {})
+        speed_percent = float(motion.get("speed_percent", 100.0))
+        speed_scale = max(0.1, min(speed_percent / 100.0, 2.0))
+        duration_ms = int(max(50, duration_ms / speed_scale))
         msg = MultiRawIdPosDur(
             id_pos_dur_list=[
                 RawIdPosDur(int(sid), int(pos), int(duration_ms)) for sid, pos in id_pos_list
@@ -270,6 +274,16 @@ class SettingsDialog(QtWidgets.QDialog):
         exposure_layout.addRow("", self.exposure_spin)
         layout.addWidget(exposure_group)
 
+        motion_group = QtWidgets.QGroupBox("运动速度")
+        motion_layout = QtWidgets.QFormLayout(motion_group)
+        self.speed_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.speed_slider.setRange(10, 200)
+        self.speed_spin = QtWidgets.QSpinBox()
+        self.speed_spin.setRange(10, 200)
+        motion_layout.addRow("速度(%)", self.speed_slider)
+        motion_layout.addRow("", self.speed_spin)
+        layout.addWidget(motion_group)
+
         roi_group = QtWidgets.QGroupBox("抓取范围 ROI")
         roi_form = QtWidgets.QFormLayout(roi_group)
         self.roi_x_min = QtWidgets.QSpinBox()
@@ -331,6 +345,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.pose_tabs.currentChanged.connect(self._on_pose_tab_changed)
         self.exposure_slider.valueChanged.connect(self._on_exposure_changed)
         self.exposure_spin.valueChanged.connect(self._on_exposure_spin_changed)
+        self.speed_slider.valueChanged.connect(self._on_speed_changed)
+        self.speed_spin.valueChanged.connect(self._on_speed_spin_changed)
         self.calib_btn.clicked.connect(self._on_calibration)
         self.save_btn.clicked.connect(self._on_save)
 
@@ -405,6 +421,25 @@ class SettingsDialog(QtWidgets.QDialog):
             self.exposure_slider.blockSignals(False)
         self._send_exposure(value)
 
+    def _on_speed_changed(self, value):
+        if self.speed_spin.value() != value:
+            self.speed_spin.blockSignals(True)
+            self.speed_spin.setValue(value)
+            self.speed_spin.blockSignals(False)
+        self._set_speed_percent(value)
+
+    def _on_speed_spin_changed(self, value):
+        if self.speed_slider.value() != value:
+            self.speed_slider.blockSignals(True)
+            self.speed_slider.setValue(value)
+            self.speed_slider.blockSignals(False)
+        self._set_speed_percent(value)
+
+    def _set_speed_percent(self, value):
+        motion = self.config.get("motion", {})
+        motion["speed_percent"] = int(value)
+        self.config.data["motion"] = motion
+
     def _send_exposure(self, value):
         now = time.time()
         if now - self._last_exposure_send < 0.2:
@@ -455,6 +490,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.exposure_slider.setValue(exposure)
         self.exposure_spin.setValue(exposure)
 
+        motion = self.config.get("motion", {})
+        speed_percent = int(motion.get("speed_percent", 100))
+        self.speed_slider.setValue(speed_percent)
+        self.speed_spin.setValue(speed_percent)
+
         roi = self.config.get("roi", {})
         self.roi_x_min.setValue(int(roi.get("x_min", 0)))
         self.roi_y_min.setValue(int(roi.get("y_min", 0)))
@@ -481,6 +521,10 @@ class SettingsDialog(QtWidgets.QDialog):
         cam = self.config.get("camera", {})
         cam["exposure"] = int(self.exposure_spin.value())
         self.config.data["camera"] = cam
+
+        motion = self.config.get("motion", {})
+        motion["speed_percent"] = int(self.speed_spin.value())
+        self.config.data["motion"] = motion
 
         self.config.data["roi"] = {
             "x_min": int(self.roi_x_min.value()),

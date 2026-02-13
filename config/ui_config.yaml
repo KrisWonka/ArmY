@@ -9,6 +9,9 @@ camera:
   auto_exposure: true
   auto_white_balance: true
 
+motion:
+  speed_percent: 100
+
 detection:
   node_name: color_detection
 
