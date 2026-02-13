@@ -359,6 +359,7 @@ class SettingsDialog(QtWidgets.QDialog):
             slider.setRange(0, 1000)
             spin = QtWidgets.QSpinBox()
             spin.setRange(0, 1000)
+            spin.setSingleStep(10)
             grid.addWidget(label, row, 0)
             grid.addWidget(slider, row, 1)
             grid.addWidget(spin, row, 2)
