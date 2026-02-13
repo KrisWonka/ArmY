@@ -323,7 +323,7 @@ class SettingsDialog(QtWidgets.QDialog):
         calib_layout.addWidget(self.calib_btn)
         layout.addWidget(calib_group)
 
-        self.save_btn = QtWidgets.QPushButton("保存参数")
+        self.save_btn = QtWidgets.QPushButton("保存舵机角度参数")
         layout.addWidget(self.save_btn)
 
         self.debug_cb.stateChanged.connect(self._on_debug_changed)
