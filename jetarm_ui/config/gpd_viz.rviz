@@ -1,0 +1,71 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.5
+      Cell Size: 1
+      Class: rviz/Grid
+      Color: 160; 160; 164
+      Enabled: true
+      Name: Grid
+      Plane: XY
+      Plane Cell Count: 20
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz/TF
+      Enabled: true
+      Frame Timeout: 15
+      Marker Scale: 0.2
+      Name: TF
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Value: true
+    - Class: rviz/PointCloud2
+      Enabled: true
+      Name: RealDepthPointCloud
+      Topic: /rgbd_cam/depth/points
+      Queue Size: 5
+      Style: Flat Squares
+      Size (Pixels): 2
+      Size (m): 0.01
+      Color Transformer: Intensity
+      Intensity Transformer: Intensity
+      Use Fixed Frame: true
+      Value: true
+    - Class: rviz/MarkerArray
+      Enabled: true
+      Marker Topic: /detect_grasps/plot_grasps
+      Name: GPDPlotGrasps
+      Namespaces:
+        {}
+      Queue Size: 10
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: rgbd_cam_depth_optical_frame
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 1.2
+      Focal Point:
+        X: 0.0
+        Y: 0.0
+        Z: 0.2
+      Name: Current View
+      Pitch: 0.45
+      Yaw: 0.8
+Window Geometry:
+  Height: 900
+  Width: 1500

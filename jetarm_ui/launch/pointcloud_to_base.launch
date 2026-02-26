@@ -1,0 +1,11 @@
+<launch>
+  <arg name="target_frame" default="base_link"/>
+  <arg name="input_topic" default="/rgbd_cam/depth/points"/>
+  <arg name="output_topic" default="/rgbd_cam/depth/points_base"/>
+
+  <node pkg="jetarm_ui" type="pointcloud_to_base.py" name="pointcloud_to_base" output="screen">
+    <param name="target_frame" value="$(arg target_frame)"/>
+    <param name="input_topic" value="$(arg input_topic)"/>
+    <param name="output_topic" value="$(arg output_topic)"/>
+  </node>
+</launch>

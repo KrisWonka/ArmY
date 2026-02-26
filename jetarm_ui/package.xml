@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>jetarm_ui</name>
+  <version>0.1.0</version>
+  <description>Custom JetArm UI for grasping workflow</description>
+
+  <maintainer email="hiwonder@todo.todo">hiwonder</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>actionlib</depend>
+  <depend>hiwonder_interfaces</depend>
+  <depend>dynamic_reconfigure</depend>
+  <depend>astra_camera</depend>
+
+  <export>
+  </export>
+</package>

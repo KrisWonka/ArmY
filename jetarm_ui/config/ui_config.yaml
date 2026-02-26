@@ -1,0 +1,110 @@
+camera:
+  auto_exposure: false
+  auto_white_balance: true
+  camera_info_topic: /rgbd_cam/color/camera_info
+  depth_topic: /rgbd_cam/depth/image_raw
+  exposure: 2000
+  image_topic: /color_detection/image_result
+  name: rgbd_cam
+  object_info_topic: /object/pixel_coords
+  service_namespace: /rgbd_cam
+debug:
+  enabled: true
+detection:
+  node_name: color_detection
+goods:
+- label: red
+  name: 红方块
+- label: blue
+  name: 蓝方块
+gpd:
+  align_angle: -90.0
+  approach:
+    x: 0.0
+    y: 0.0
+    z: 0.04
+  camera_frame: rgbd_cam_color_optical_frame
+  enabled: true
+  grasp_posture: 400
+  grasp_topic: /detect_grasps/clustered_grasps
+  pitch: 80.0
+  pre_grasp_posture: 600
+  retreat:
+    x: 0.0
+    y: 0.0
+    z: 0.04
+  target_frame: base_link
+motion:
+  speed_percent: 100
+poses:
+  grab:
+    duration_ms: 800
+    joints:
+    - - 1
+      - 500
+    - - 2
+      - 560
+    - - 3
+      - 130
+    - - 4
+      - 115
+    - - 5
+      - 500
+    - - 10
+      - 200
+  grab_layer1:
+    duration_ms: 800
+    joints:
+    - - 1
+      - 500
+    - - 2
+      - 560
+    - - 3
+      - 130
+    - - 4
+      - 115
+    - - 5
+      - 500
+    - - 10
+      - 200
+  init:
+    duration_ms: 800
+    joints:
+    - - 1
+      - 500
+    - - 2
+      - 560
+    - - 3
+      - 155
+    - - 4
+      - 248
+    - - 5
+      - 500
+    - - 10
+      - 200
+  scan:
+    duration_ms: 800
+    joints:
+    - - 1
+      - 500
+    - - 2
+      - 560
+    - - 3
+      - 130
+    - - 4
+      - 115
+    - - 5
+      - 500
+    - - 10
+      - 200
+roi:
+  x_max: 420
+  x_min: 220
+  y_max: 340
+  y_min: 140
+search:
+  base_servo_id: 1
+  duration_ms: 4000
+  left_pos: 875
+  manual_hint_only: false
+  right_pos: 125

@@ -1,0 +1,23 @@
+<launch>
+  <arg name="start_gazebo" default="false"/>
+  <arg name="paused" default="false"/>
+  <arg name="gazebo_gui" default="true"/>
+  <arg name="start_gpd_grasp" default="true"/>
+  <arg name="rviz_config" default="$(find jetarm_ui)/config/gpd_viz.rviz"/>
+
+  <!-- Gazebo robot simulation -->
+  <group if="$(arg start_gazebo)">
+    <include file="$(find jetarm_6dof_moveit_config)/launch/gazebo.launch">
+      <arg name="paused" value="$(arg paused)"/>
+      <arg name="gazebo_gui" value="$(arg gazebo_gui)"/>
+    </include>
+  </group>
+
+  <!-- RViz for real depth + GPD grasp markers -->
+  <node pkg="rviz" type="rviz" name="gpd_viz_rviz" args="-d $(arg rviz_config)" output="screen"/>
+
+  <!-- Optional bridge service to trigger grasp -->
+  <group if="$(arg start_gpd_grasp)">
+    <include file="$(find jetarm_ui)/launch/gpd_grasp.launch"/>
+  </group>
+</launch>
