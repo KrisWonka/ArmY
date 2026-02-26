@@ -1,0 +1,7 @@
+<launch>
+  <arg name="grasp_topic" default="/detect_grasps/clustered_grasps"/>
+
+  <node pkg="jetarm_ui" type="gpd_grasp_node.py" name="gpd_grasp" output="screen">
+    <param name="grasp_topic" value="$(arg grasp_topic)"/>
+  </node>
+</launch>

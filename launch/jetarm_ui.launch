@@ -2,6 +2,12 @@
   <arg name="camera_type" default="$(optenv CAMERA_TYPE GEMINI)"/>
   <arg name="enable_base" default="true"/>
   <arg name="enable_color_detection" default="true"/>
+  <arg name="enable_gpd" default="false"/>
+  <arg name="enable_base_to_camera_tf" default="true"/>
+  <arg name="camera_mount_parent" default="link5"/>
+  <arg name="camera_mount_child" default="rgbd_cam_link"/>
+  <arg name="base_to_camera_xyz" default="0.0 0.0 0.0"/>
+  <arg name="base_to_camera_rpy" default="0.0 0.0 0.0"/>
 
   <group if="$(arg enable_base)">
     <include file="$(find jetarm_bringup)/launch/base.launch"/>
@@ -11,6 +17,16 @@
     <include file="$(find color_detection)/launch/color_detection_node.launch">
       <arg name="camera_type" value="$(arg camera_type)"/>
     </include>
+  </group>
+
+  <group if="$(arg enable_gpd)">
+    <include file="$(find jetarm_ui)/launch/gpd_grasp.launch"/>
+  </group>
+
+  <!-- Bridge arm TF tree and camera TF tree for RViz fixed frame base_link -->
+  <group if="$(arg enable_base_to_camera_tf)">
+    <node pkg="tf2_ros" type="static_transform_publisher" name="arm_to_rgbd_cam_link_tf"
+          args="$(arg base_to_camera_xyz) $(arg base_to_camera_rpy) $(arg camera_mount_parent) $(arg camera_mount_child)"/>
   </group>
 
   <node pkg="jetarm_ui" type="jetarm_ui_node.py" name="jetarm_ui" output="screen"/>
