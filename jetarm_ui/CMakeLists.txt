@@ -7,13 +7,14 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   geometry_msgs
   actionlib
+  tf2_msgs
   hiwonder_interfaces
   dynamic_reconfigure
   astra_camera
 )
 
 catkin_package(
-  CATKIN_DEPENDS rospy std_msgs sensor_msgs geometry_msgs actionlib hiwonder_interfaces dynamic_reconfigure astra_camera
+  CATKIN_DEPENDS rospy std_msgs sensor_msgs geometry_msgs actionlib tf2_msgs hiwonder_interfaces dynamic_reconfigure astra_camera
 )
 
 include_directories(

@@ -17,8 +17,11 @@
     <include file="$(find color_detection)/launch/color_detection_node.launch"/>
   </group>
 
+  <group if="$(arg enable_points_base)">
+    <include file="$(find jetarm_ui)/launch/pointcloud_to_base.launch"/>
+  </group>
+
   <group if="$(arg enable_gpd)">
-    <include if="$(arg enable_points_base)" file="$(find jetarm_ui)/launch/pointcloud_to_base.launch"/>
     <include file="$(find jetarm_ui)/launch/gpd_grasp.launch"/>
   </group>
 

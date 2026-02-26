@@ -14,6 +14,7 @@
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>actionlib</depend>
+  <depend>tf2_msgs</depend>
   <depend>hiwonder_interfaces</depend>
   <depend>dynamic_reconfigure</depend>
   <depend>astra_camera</depend>

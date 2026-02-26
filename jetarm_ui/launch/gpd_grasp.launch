@@ -3,19 +3,27 @@
 
   <node pkg="jetarm_ui" type="gpd_grasp_node.py" name="gpd_grasp" output="screen">
     <param name="grasp_topic" value="$(arg grasp_topic)"/>
+    <param name="use_ui_init_pose" value="true"/>
+    <param name="ui_config_path" value="/home/hiwonder/jetarm/src/jetarm_ui/config/ui_config.yaml"/>
+    <param name="use_saved_grasp_offset" value="true"/>
+    <param name="grasp_offset_config_path" value="/home/hiwonder/jetarm/src/jetarm_ui/config/tf_calibration.yaml"/>
+    <param name="pre_grasp_posture" value="380"/>
+    <param name="grasp_posture" value="650"/>
+    <param name="x_offset" value="-0.03"/>
+    <param name="y_offset" value="0.00"/>
+    <param name="z_offset" value="0.00"/>
     <rosparam param="pick_bounds">
-      x_min: 0.22
-      x_max: 0.95
-      y_min: -0.35
-      y_max: 0.40
-      z_min: -0.20
-      z_max: 0.18
+      x_min: 0.05
+      x_max: 0.45
+      y_min: -0.30
+      y_max: 0.30
+      z_min: -0.10
+      z_max: 0.50
     </rosparam>
     <rosparam param="preferred_point">
       x: 0.45
       y: 0.00
       z: 0.00
     </rosparam>
-    <param name="z_offset" value="0.00"/>
   </node>
 </launch>

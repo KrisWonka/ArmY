@@ -1,0 +1,13 @@
+parent_frame: link5
+child_frame: rgbd_cam_link
+transform:
+  x: 0.0
+  y: 0.0
+  z: 0.0
+  roll: 0.0
+  pitch: -1.57
+  yaw: 0.0
+grasp_offset:
+  x: -3.469446951953614e-17
+  y: -0.005
+  z: 0.0

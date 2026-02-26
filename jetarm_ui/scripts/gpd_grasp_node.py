@@ -3,6 +3,8 @@
 
 import rospy
 import actionlib
+import os
+import yaml
 from std_srvs.srv import Trigger, TriggerResponse
 from geometry_msgs.msg import Point
 
@@ -31,6 +33,8 @@ class GpdGraspNode:
         self.grasp_posture = rospy.get_param("~grasp_posture", 400)
         self.approach = rospy.get_param("~approach", {"x": 0.0, "y": 0.0, "z": 0.02})
         self.retreat = rospy.get_param("~retreat", {"x": 0.0, "y": 0.0, "z": 0.03})
+        self.x_offset = rospy.get_param("~x_offset", 0.0)
+        self.y_offset = rospy.get_param("~y_offset", 0.0)
         self.z_offset = rospy.get_param("~z_offset", 0.0)
 
         # Keep only candidates in a conservative reachable box.
@@ -56,6 +60,18 @@ class GpdGraspNode:
             "~init_joints",
             [[1, 500], [2, 560], [3, 130], [4, 115], [5, 500], [10, 200]],
         )
+        self.ui_config_path = rospy.get_param(
+            "~ui_config_path",
+            "/home/hiwonder/jetarm/src/jetarm_ui/config/ui_config.yaml",
+        )
+        self.use_ui_init_pose = rospy.get_param("~use_ui_init_pose", True)
+        self.use_saved_grasp_offset = rospy.get_param("~use_saved_grasp_offset", True)
+        self.grasp_offset_config_path = rospy.get_param(
+            "~grasp_offset_config_path",
+            "/home/hiwonder/jetarm/src/jetarm_ui/config/tf_calibration.yaml",
+        )
+        self._sync_init_pose_from_ui_config()
+        self._sync_grasp_offset_from_config()
 
         self.last_grasps = None
         self.action_client = actionlib.SimpleActionClient("/grasp", MoveAction)
@@ -73,8 +89,50 @@ class GpdGraspNode:
         self.trigger_srv = rospy.Service("~trigger", Trigger, self._on_trigger)
         rospy.loginfo("gpd_grasp: ready")
 
+    def _sync_init_pose_from_ui_config(self):
+        if not self.use_ui_init_pose:
+            return
+        if not os.path.exists(self.ui_config_path):
+            rospy.logwarn("gpd_grasp: ui config not found: %s", self.ui_config_path)
+            return
+        try:
+            with open(self.ui_config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            init_pose = (cfg.get("poses", {}) or {}).get("init", {}) or {}
+            joints = init_pose.get("joints", None)
+            duration_ms = init_pose.get("duration_ms", None)
+            if isinstance(joints, list) and len(joints) > 0:
+                self.init_joints = joints
+            if duration_ms is not None:
+                self.return_duration_ms = int(duration_ms)
+            rospy.loginfo(
+                "gpd_grasp: loaded init pose from ui config (%s joints, %d ms)",
+                len(self.init_joints),
+                self.return_duration_ms,
+            )
+        except Exception as exc:
+            rospy.logwarn("gpd_grasp: load ui init pose failed: %s", str(exc))
+
     def _on_grasps(self, msg):
         self.last_grasps = msg
+
+    def _sync_grasp_offset_from_config(self):
+        if not self.use_saved_grasp_offset:
+            return
+        if not os.path.exists(self.grasp_offset_config_path):
+            return
+        try:
+            with open(self.grasp_offset_config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            go = cfg.get("grasp_offset", {}) or {}
+            if "x" in go:
+                self.x_offset = float(go["x"])
+            if "y" in go:
+                self.y_offset = float(go["y"])
+            if "z" in go:
+                self.z_offset = float(go["z"])
+        except Exception as exc:
+            rospy.logwarn_throttle(2.0, "gpd_grasp: load grasp_offset failed: %s", str(exc))
 
     def _in_pick_bounds(self, p):
         b = self.pick_bounds
@@ -126,6 +184,7 @@ class GpdGraspNode:
             self.joints_pub.publish(msg)
 
     def _on_trigger(self, _req):
+        self._sync_grasp_offset_from_config()
         if not HAS_GPD:
             return TriggerResponse(success=False, message="gpd_ros not available")
         if self.last_grasps is None or len(self.last_grasps.grasps) == 0:
@@ -138,8 +197,8 @@ class GpdGraspNode:
 
         goal = MoveGoal()
         goal.grasp.mode = "pick"
-        goal.grasp.position.x = pos.x
-        goal.grasp.position.y = pos.y
+        goal.grasp.position.x = pos.x + float(self.x_offset)
+        goal.grasp.position.y = pos.y + float(self.y_offset)
         goal.grasp.position.z = pos.z + float(self.z_offset)
         goal.grasp.pitch = float(self.pitch)
         goal.grasp.align_angle = float(self.align_angle)
@@ -151,6 +210,17 @@ class GpdGraspNode:
         goal.grasp.grasp_retreat.z = float(self.retreat.get("z", 0.03))
         goal.grasp.pre_grasp_posture = int(self.pre_grasp_posture)
         goal.grasp.grasp_posture = int(self.grasp_posture)
+        rospy.loginfo(
+            "gpd_grasp: pick raw(%.4f, %.4f, %.4f) -> cmd(%.4f, %.4f, %.4f), pre=%d grasp=%d",
+            pos.x,
+            pos.y,
+            pos.z,
+            goal.grasp.position.x,
+            goal.grasp.position.y,
+            goal.grasp.position.z,
+            goal.grasp.pre_grasp_posture,
+            goal.grasp.grasp_posture,
+        )
 
         self.action_client.send_goal(goal)
         self.action_client.wait_for_result()

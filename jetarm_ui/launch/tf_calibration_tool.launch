@@ -1,0 +1,13 @@
+<launch>
+  <arg name="parent_frame" default="link5"/>
+  <arg name="child_frame" default="rgbd_cam_link"/>
+  <arg name="config_path" default="/home/hiwonder/jetarm/src/jetarm_ui/config/tf_calibration.yaml"/>
+  <arg name="publish_hz" default="20.0"/>
+
+  <node pkg="jetarm_ui" type="tf_calibration_tool.py" name="tf_calibration_tool" output="screen">
+    <param name="parent_frame" value="$(arg parent_frame)"/>
+    <param name="child_frame" value="$(arg child_frame)"/>
+    <param name="config_path" value="$(arg config_path)"/>
+    <param name="publish_hz" value="$(arg publish_hz)"/>
+  </node>
+</launch>
