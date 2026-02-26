@@ -8,7 +8,7 @@
 
     <!-- What type of point cloud is used and what ROS topic it comes from -->
         <param name="cloud_type" value="0" /> <!-- 0: PointCloud2, 1: CloudIndexed, 2: CloudSamples -->
-        <param name="cloud_topic" value="/rgbd_cam/depth/points" />
+        <param name="cloud_topic" value="/rgbd_cam/depth/points_base" />
 
     <!-- (optional) The ROS topic that the samples come from (default: an empty string) -->
     <param name="samples_topic" value="" />
