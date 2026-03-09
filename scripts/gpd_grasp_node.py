@@ -51,12 +51,12 @@ class GpdGraspNode:
         self.pick_bounds = rospy.get_param(
             "~pick_bounds",
             {
-                "x_min": -0.30,
-                "x_max": 0.30,
-                "y_min": -0.25,
-                "y_max": 0.25,
-                "z_min": 0.00,
-                "z_max": 0.25,
+                "x_min": -0.05,
+                "x_max": 0.36,
+                "y_min": -0.30,
+                "y_max": 0.30,
+                "z_min": -0.05,
+                "z_max": 0.40,
             },
         )
         # Prefer grasps near the workspace center to avoid edge/noisy picks.

@@ -20,23 +20,50 @@ from astra_camera.srv import SetInt32
 
 
 CONFIG_PATH = "/home/hiwonder/jetarm/src/jetarm_ui/config/ui_config.yaml"
+USER_CONFIG_PATH = os.path.expanduser("~/.jetarm_ui/ui_config.user.yaml")
+
+
+def _deep_merge_dict(base, override):
+    if not isinstance(base, dict):
+        base = {}
+    if not isinstance(override, dict):
+        return dict(base)
+    out = dict(base)
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(out.get(k), dict):
+            out[k] = _deep_merge_dict(out.get(k, {}), v)
+        else:
+            out[k] = v
+    return out
 
 
 class UiConfig:
-    def __init__(self, path=CONFIG_PATH):
+    def __init__(self, path=CONFIG_PATH, user_path=USER_CONFIG_PATH):
         self.path = path
+        self.user_path = user_path
         self.data = {}
         self.load()
 
     def load(self):
+        base_data = {}
         if os.path.exists(self.path):
             with open(self.path, "r") as f:
-                self.data = yaml.safe_load(f) or {}
-        else:
-            self.data = {}
+                base_data = yaml.safe_load(f) or {}
+
+        user_data = {}
+        if self.user_path and os.path.exists(self.user_path):
+            with open(self.user_path, "r") as f:
+                user_data = yaml.safe_load(f) or {}
+
+        # User config overrides defaults so values survive rebuild/redeploy.
+        self.data = _deep_merge_dict(base_data, user_data)
 
     def save(self):
-        with open(self.path, "w") as f:
+        save_path = self.user_path or self.path
+        save_dir = os.path.dirname(save_path)
+        if save_dir and not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        with open(save_path, "w") as f:
             yaml.safe_dump(self.data, f, allow_unicode=True)
 
     def get(self, key, default=None):
@@ -90,13 +117,6 @@ class RosBridge(QtCore.QObject):
                 buffer=ros_image.data,
             )
             bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            roi = self.config.get("roi", {})
-            x_min = int(roi.get("x_min", 0))
-            y_min = int(roi.get("y_min", 0))
-            x_max = int(roi.get("x_max", 0))
-            y_max = int(roi.get("y_max", 0))
-            if x_max > x_min and y_max > y_min:
-                cv2.rectangle(bgr, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
             bytes_per_line = ch * w
@@ -283,20 +303,6 @@ class SettingsDialog(QtWidgets.QDialog):
         motion_layout.addRow("速度(%)", self.speed_slider)
         motion_layout.addRow("", self.speed_spin)
         layout.addWidget(motion_group)
-
-        roi_group = QtWidgets.QGroupBox("抓取范围 ROI")
-        roi_form = QtWidgets.QFormLayout(roi_group)
-        self.roi_x_min = QtWidgets.QSpinBox()
-        self.roi_y_min = QtWidgets.QSpinBox()
-        self.roi_x_max = QtWidgets.QSpinBox()
-        self.roi_y_max = QtWidgets.QSpinBox()
-        for w in (self.roi_x_min, self.roi_y_min, self.roi_x_max, self.roi_y_max):
-            w.setRange(0, 2000)
-        roi_form.addRow("x_min", self.roi_x_min)
-        roi_form.addRow("y_min", self.roi_y_min)
-        roi_form.addRow("x_max", self.roi_x_max)
-        roi_form.addRow("y_max", self.roi_y_max)
-        layout.addWidget(roi_group)
 
         self.pose_tabs = QtWidgets.QTabWidget()
         self.pose_tables = {}
@@ -495,12 +501,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.speed_slider.setValue(speed_percent)
         self.speed_spin.setValue(speed_percent)
 
-        roi = self.config.get("roi", {})
-        self.roi_x_min.setValue(int(roi.get("x_min", 0)))
-        self.roi_y_min.setValue(int(roi.get("y_min", 0)))
-        self.roi_x_max.setValue(int(roi.get("x_max", 0)))
-        self.roi_y_max.setValue(int(roi.get("y_max", 0)))
-
         poses = self.config.get("poses", {})
         for key in self.pose_order:
             self._set_pose(key, self.pose_tables[key], poses.get(key, {}))
@@ -525,13 +525,6 @@ class SettingsDialog(QtWidgets.QDialog):
         motion = self.config.get("motion", {})
         motion["speed_percent"] = int(self.speed_spin.value())
         self.config.data["motion"] = motion
-
-        self.config.data["roi"] = {
-            "x_min": int(self.roi_x_min.value()),
-            "y_min": int(self.roi_y_min.value()),
-            "x_max": int(self.roi_x_max.value()),
-            "y_max": int(self.roi_y_max.value()),
-        }
 
         poses = self.config.get("poses", {})
         for key in self.pose_order:

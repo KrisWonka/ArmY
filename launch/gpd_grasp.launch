@@ -34,5 +34,7 @@
       y: 0.00
       z: 0.00
     </rosparam>
+    <param name="edge_margin_m" value="0.03"/>
+    <param name="edge_penalty_weight" value="3.0"/>
   </node>
 </launch>

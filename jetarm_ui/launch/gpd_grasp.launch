@@ -12,6 +12,15 @@
     <param name="x_offset" value="-0.03"/>
     <param name="y_offset" value="0.00"/>
     <param name="z_offset" value="0.00"/>
+    <param name="use_slanted_push_pick" value="true"/>
+    <param name="attack_angle_deg" value="20.0"/>
+    <param name="base_pick_pitch_deg" value="80.0"/>
+    <param name="approach_distance_m" value="0.05"/>
+    <param name="retreat_back_m" value="0.03"/>
+    <param name="retreat_up_m" value="0.04"/>
+    <param name="debug_marker_frame" value="base_link"/>
+    <param name="debug_marker_topic" value="/gpd_grasp/debug_markers"/>
+    <param name="debug_marker_rate_hz" value="2.0"/>
     <rosparam param="pick_bounds">
       x_min: 0.05
       x_max: 0.45
@@ -25,5 +34,7 @@
       y: 0.00
       z: 0.00
     </rosparam>
+    <param name="edge_margin_m" value="0.03"/>
+    <param name="edge_penalty_weight" value="3.0"/>
   </node>
 </launch>
